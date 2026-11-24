@@ -15,7 +15,10 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
+import kotlin.math.sign
 import kotlin.math.sqrt
+import kotlin.math.tanh
 
 /**
  * Gọi thoại qua UDP trong cùng mạng wifi.
@@ -40,6 +43,7 @@ class CallEngine(
     @Volatile private var running = false
     @Volatile private var endedAt = 0L
     @Volatile private var farLevel = 0f        // độ lớn tiếng bên kia đang phát ra loa
+    @Volatile private var farHoldUntil = 0L
     private var socket: DatagramSocket? = null
 
     // thống kê mạng
@@ -155,7 +159,9 @@ class CallEngine(
             val micNow = sqrt(e / n)
             micLevel = if (micNow > micLevel) micNow else micLevel * 0.85f
             val far = farLevel
-            val target = if (far > 0.015f && micLevel < far * 0.6f) 0.2f else 1f
+            val farActive = far > 0.015f || System.currentTimeMillis() < farHoldUntil
+            // Loa đang phát (hoặc vừa phát <350ms): chỉ cho micro qua khi mình nói to hơn hẳn tiếng loa dội vào
+            val target = if (farActive && micLevel < maxOf(far, 0.02f) * 2f) 0.05f else 1f
             for (i in 0 until n) {
                 g += (target - g) * 0.004f              // đổi mượt, không bị lụp bụp
                 pcm[i] = (pcm[i] * g).toInt().toShort()
@@ -234,6 +240,7 @@ class CallEngine(
         track.play()
         val silence = ShortArray(FRAME)
         var buffering = true
+        var pg = 1f
         while (running) {
             if (!inCall) {
                 jitter.clear(); buffering = true; farLevel = 0f
@@ -254,8 +261,20 @@ class CallEngine(
                 var e = 0f
                 for (v in pcm) { val f = v / 32768f; e += f * f }
                 val lvl = sqrt(e / pcm.size)
-                // giữ mức cao ~200ms để che cả phần tiếng vang dội lại
-                farLevel = if (lvl > farLevel) lvl else farLevel * 0.9f
+                // Tự tăng âm lượng tiếng nói nhỏ (tối đa 3 lần), không tăng tiếng ồn nền
+                if (lvl > 0.01f) {
+                    val t = (0.15f / lvl).coerceIn(1f, 3f)
+                    pg += (t - pg) * 0.15f
+                }
+                for (i in pcm.indices) {
+                    var y = pcm[i] / 32768f * pg
+                    val a = abs(y)
+                    if (a > 0.7f) y = sign(y) * (0.7f + 0.3f * tanh((a - 0.7f) / 0.3f))   // chặn đỉnh mềm
+                    pcm[i] = (y * 32767f).toInt().toShort()
+                }
+                val outLvl = lvl * pg
+                farLevel = if (outLvl > farLevel) outLvl else farLevel * 0.9f
+                if (outLvl > 0.02f) farHoldUntil = System.currentTimeMillis() + 350
                 track.write(pcm, 0, pcm.size)
             }
         }
