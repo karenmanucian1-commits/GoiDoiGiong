@@ -146,7 +146,6 @@ class CallEngine(
         var seq = 0
         var g = 1f
         var micLevel = 0f
-        var noiseFloor = 0.01f
         while (inCall) {
             val n = rec.read(pcm, 0, FRAME)
             if (n <= 0) continue
@@ -160,18 +159,11 @@ class CallEngine(
             val micNow = sqrt(e / n)
             micLevel = if (micNow > micLevel) micNow else micLevel * 0.85f
             val far = farLevel
-            val farActive = far > 0.015f || System.currentTimeMillis() < farHoldUntil
-            // Loa đang phát (hoặc vừa phát <350ms): chỉ cho micro qua khi mình nói to hơn hẳn tiếng loa dội vào
-            // Lọc tiếng xì nền: đo mức ồn khi im lặng, dưới mức đó thì giảm mạnh
-            noiseFloor = if (micNow < noiseFloor) micNow else noiseFloor * 1.002f + 0.000002f
-            val quiet = micLevel < maxOf(noiseFloor * 3f, 0.004f)
-            val target = when {
-                farActive && micLevel < maxOf(far, 0.02f) * 2f -> 0.05f
-                quiet -> 0.1f
-                else -> 1f
-            }
+            val farActive = far > 0.02f || System.currentTimeMillis() < farHoldUntil
+            // Chỉ giảm nhẹ micro khi loa đang phát tiếng bên kia to hơn hẳn tiếng mình nói
+            val target = if (farActive && micLevel < far * 0.8f) 0.3f else 1f
             for (i in 0 until n) {
-                g += (target - g) * 0.004f              // đổi mượt, không bị lụp bụp
+                g += (target - g) * (if (target > g) 0.02f else 0.002f)   // mở micro nhanh, giảm chậm
                 pcm[i] = (pcm[i] * g).toInt().toShort()
             }
 
@@ -282,7 +274,7 @@ class CallEngine(
                 }
                 val outLvl = lvl * pg
                 farLevel = if (outLvl > farLevel) outLvl else farLevel * 0.9f
-                if (outLvl > 0.02f) farHoldUntil = System.currentTimeMillis() + 350
+                if (outLvl > 0.02f) farHoldUntil = System.currentTimeMillis() + 120
                 track.write(pcm, 0, pcm.size)
             }
         }
