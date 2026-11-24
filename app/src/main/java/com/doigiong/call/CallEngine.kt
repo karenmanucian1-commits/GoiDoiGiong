@@ -107,17 +107,15 @@ class CallEngine(
         rec.release()
     }
 
+    /** Hàng đợi chống giật: gom vài gói trước khi phát để wifi chậm không gây rè. */
+    private val jitter = java.util.concurrent.LinkedBlockingQueue<ShortArray>()
+
     private fun receiveLoop() {
-        val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        @Suppress("DEPRECATION")
-        val track = AudioTrack(
-            AudioManager.STREAM_VOICE_CALL, RATE, AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, maxOf(min, FRAME * 8), AudioTrack.MODE_STREAM
-        )
-        track.play()
+        Thread { playLoop() }.start()
         val data = ByteArray(2048)
         val pkt = DatagramPacket(data, data.size)
         val s = socket ?: return
+        try { s.receiveBufferSize = 65536 } catch (_: Exception) { }
         while (running) {
             try {
                 s.receive(pkt)
@@ -131,9 +129,41 @@ class CallEngine(
                         peer = pkt.address
                         beginCall()
                     }
-                    track.write(data, 1, pkt.length - 1)
+                    val n = (pkt.length - 1) / 2
+                    val pcm = ShortArray(n)
+                    for (i in 0 until n) {
+                        pcm[i] = ((data[1 + i * 2].toInt() and 0xFF) or (data[2 + i * 2].toInt() shl 8)).toShort()
+                    }
+                    jitter.offer(pcm)
+                    while (jitter.size > 12) jitter.poll()     // bỏ bớt nếu dồn quá (>240ms)
                 }
                 3 -> if (inCall) endCall("Bên kia đã cúp máy")
+            }
+        }
+    }
+
+    private fun playLoop() {
+        val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        @Suppress("DEPRECATION")
+        val track = AudioTrack(
+            AudioManager.STREAM_VOICE_CALL, RATE, AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT, maxOf(min * 2, FRAME * 16), AudioTrack.MODE_STREAM
+        )
+        track.play()
+        val silence = ShortArray(FRAME)
+        var buffering = true
+        while (running) {
+            if (!inCall) { jitter.clear(); buffering = true; Thread.sleep(20); continue }
+            if (buffering) {
+                if (jitter.size < 4) { Thread.sleep(10); continue }   // gom đủ ~80ms rồi mới phát
+                buffering = false
+            }
+            val pcm = jitter.poll(60, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (pcm == null) {
+                track.write(silence, 0, FRAME)
+                buffering = true
+            } else {
+                track.write(pcm, 0, pcm.size)
             }
         }
         track.stop()

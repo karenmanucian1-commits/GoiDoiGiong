@@ -105,7 +105,7 @@ class VoiceEffect(private val sr: Int) {
             eIn += xi * xi; eOut += tmp[k] * tmp[k]
         }
         if (eOut > 1e-7f) {
-            val target = (sqrt(eIn / eOut)).coerceIn(0.5f, 4f)
+            val target = (sqrt(eIn / eOut)).coerceIn(0.5f, 2.5f)
             gain = 0.9f * gain + 0.1f * target
         }
         val envel = sqrt(eIn / n)
