@@ -146,6 +146,7 @@ class CallEngine(
         var seq = 0
         var g = 1f
         var micLevel = 0f
+        var noiseFloor = 0.01f
         while (inCall) {
             val n = rec.read(pcm, 0, FRAME)
             if (n <= 0) continue
@@ -161,7 +162,14 @@ class CallEngine(
             val far = farLevel
             val farActive = far > 0.015f || System.currentTimeMillis() < farHoldUntil
             // Loa đang phát (hoặc vừa phát <350ms): chỉ cho micro qua khi mình nói to hơn hẳn tiếng loa dội vào
-            val target = if (farActive && micLevel < maxOf(far, 0.02f) * 2f) 0.05f else 1f
+            // Lọc tiếng xì nền: đo mức ồn khi im lặng, dưới mức đó thì giảm mạnh
+            noiseFloor = if (micNow < noiseFloor) micNow else noiseFloor * 1.002f + 0.000002f
+            val quiet = micLevel < maxOf(noiseFloor * 3f, 0.004f)
+            val target = when {
+                farActive && micLevel < maxOf(far, 0.02f) * 2f -> 0.05f
+                quiet -> 0.1f
+                else -> 1f
+            }
             for (i in 0 until n) {
                 g += (target - g) * 0.004f              // đổi mượt, không bị lụp bụp
                 pcm[i] = (pcm[i] * g).toInt().toShort()
