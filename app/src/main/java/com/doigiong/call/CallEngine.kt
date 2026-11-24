@@ -141,17 +141,21 @@ class CallEngine(
         out[0] = 1
         var seq = 0
         var g = 1f
+        var micLevel = 0f
         while (inCall) {
             val n = rec.read(pcm, 0, FRAME)
             if (n <= 0) continue
 
             // Chặn tiếng vọng: khi loa đang phát tiếng bên kia thì hạ micro xuống,
             // trừ khi mình nói to rõ (nói chen).
+            // Máy đang nói (micro to hơn tiếng loa) thì KHÔNG bị giảm.
+            // Chỉ giảm khi tiếng loa bên kia lấn át micro, tức micro chỉ đang thu tiếng vọng.
             var e = 0f
             for (i in 0 until n) { val v = pcm[i] / 32768f; e += v * v }
-            val mic = sqrt(e / n)
+            val micNow = sqrt(e / n)
+            micLevel = if (micNow > micLevel) micNow else micLevel * 0.85f
             val far = farLevel
-            val target = if (far > 0.01f && mic < far * 1.5f + 0.02f) 0.08f else 1f
+            val target = if (far > 0.015f && micLevel < far * 0.6f) 0.2f else 1f
             for (i in 0 until n) {
                 g += (target - g) * 0.004f              // đổi mượt, không bị lụp bụp
                 pcm[i] = (pcm[i] * g).toInt().toShort()
