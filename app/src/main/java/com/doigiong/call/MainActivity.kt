@@ -75,7 +75,7 @@ class MainActivity : Activity() {
         setContentView(root)
         root.gravity = Gravity.TOP
 
-        engine = CallEngine { msg -> runOnUiThread { status.text = msg } }
+        engine = CallEngine(this) { msg -> runOnUiThread { status.text = msg } }
 
         group.setOnCheckedChangeListener { _, id -> engine.effect.voice = Voice.values()[id - 1] }
 
